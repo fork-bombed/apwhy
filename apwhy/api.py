@@ -1,5 +1,23 @@
 from urllib.parse import urlparse
-import requests
+import aiohttp
+
+
+def trim_path_end(path: str) -> str:
+    if path.endswith("/"):
+        return path[:-1]
+    return path
+
+
+def trim_path_start(path: str) -> str:
+    if path.startswith("/"):
+        return path[1:]
+    return path
+
+
+def trim_path(path: str) -> str:
+    path = trim_path_start(path)
+    path = trim_path_end(path)
+    return path
 
 
 class Api:
@@ -8,13 +26,7 @@ class Api:
         self.domain = self._parsed_url.hostname
         self.protocol = self._parsed_url.scheme
         self.port = self._parsed_url.port
-        self.path = self._trim_path(self._parsed_url.path)
-
-    def _trim_path(self, path: str) -> str:
-        if len(path) >= 1:
-            if path[-1] == "/":
-                return path[:-1]
-        return path
+        self.path = trim_path_end(self._parsed_url.path)
 
     def get_url(self) -> str:
         url_builder = []
@@ -26,14 +38,14 @@ class Api:
         return "".join(url_builder)
 
     def get_url_from_path(self, path: str) -> str:
-        return f"{self.get_url()}/{self._trim_path(path)}"
+        return f"{self.get_url()}/{trim_path(path)}"
 
 
 class Endpoint:
-    def __init__(self, api: Api, path: str) -> None:
-        self.path = path
-        self.url = api.get_url_from_path(path)
-        self.responses = []
+    def __init__(self, api: Api, session: aiohttp.ClientSession, path: str) -> None:
+        self.path = trim_path(path)
+        self.url = api.get_url_from_path(self.path)
+        self.session = session
 
     def get_path(self) -> str:
         return self.path
@@ -41,45 +53,20 @@ class Endpoint:
     def get_url(self) -> str:
         return self.url
 
-    def get_responses(self) -> list[requests.Response]:
-        return self.responses
+    async def get(self):
+        return await self.session.get(url=self.url)
 
-    def probe(self) -> requests.Response:
-        return self._get()
+    async def post(self, data=None):
+        return await self.session.post(url=self.url, data=data)
+    
+    async def put(self, data=None):
+        return await self.session.put(url=self.url, data=data)
+    
+    async def patch(self, data=None):
+        return await self.session.patch(url=self.url, data=data)
+    
+    async def head(self):
+        return await self.session.head(url=self.url)
 
-    def method_sweep(self) -> None:
-        self._post()
-        self._put()
-        self._delete()
-        self._head()
-        self._patch()
-
-    def _get(self) -> requests.Response:
-        response = requests.get(url=self.url)
-        self.responses.append(response)
-        return response
-
-    def _post(self) -> requests.Response:
-        response = requests.post(url=self.url)
-        self.responses.append(response)
-        return response
-
-    def _put(self) -> requests.Response:
-        response = requests.put(url=self.url)
-        self.responses.append(response)
-        return response
-
-    def _delete(self) -> requests.Response:
-        response = requests.delete(url=self.url)
-        self.responses.append(response)
-        return response
-
-    def _head(self) -> requests.Response:
-        response = requests.head(url=self.url)
-        self.responses.append(response)
-        return response
-
-    def _patch(self) -> requests.Response:
-        response = requests.patch(url=self.url)
-        self.responses.append(response)
-        return response
+    async def delete(self):
+        return await self.session.delete(url=self.url)

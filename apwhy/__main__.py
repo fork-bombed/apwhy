@@ -12,7 +12,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "-w", "--wordlist", required=True, help="wordlist to enumerate API endpoints"
     )
-    parser.add_argument("-t", "--threads", type=int, default=10)
+    parser.add_argument("-l", "--limit", type=int, default=50, help="parallel request limit (default 50)")
+    parser.add_argument("--hc", "--hidecodes", type=list, help="response codes to hide")
+    parser.add_argument("--sc", "--showcodes", type=list, help="response codes to show")
     return parser.parse_args()
 
 
@@ -22,7 +24,7 @@ def run():
     api = Api(args.url)
     console.output(f"Target: {api.get_url()}")
     try:
-        enumerator.run(api, args.wordlist, args.threads)
+        enumerator.run(api, args.wordlist, args.limit)
     except KeyboardInterrupt:
         console.warn("Enumeration stopped")
 

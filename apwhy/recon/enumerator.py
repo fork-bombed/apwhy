@@ -1,51 +1,81 @@
 from apwhy.api import Endpoint, Api
+from apwhy.recon.files import Wordlist
 import apwhy.console.cli as console
+import aiohttp
+import asyncio
+import time
 
 
-class Wordlist:
-    def __init__(self, path: str):
-        self.path = path
-        self.size = 0
-        self.words = []
-        self._process_wordlist()
-
-    def _read_file_chunk(self, file, chunk_size: int = 65536) -> int:
-        while True:
-            chunk = file.read(chunk_size)
-            if not chunk:
-                break
-            yield chunk
-
-    def _process_wordlist(self) -> None:
-        self.size = 0
-        self.words = []
-        try:
-            with open(self.path, "r", encoding="utf-8", errors="ignore") as f:
-                for chunk in self._read_file_chunk(f):
-                    chunk_words = chunk.split("\n")
-                    self.words += chunk_words
-                    self.size += len(chunk_words)
-        except FileNotFoundError:
-            console.error(f"Wordlist '{self.path}' not found")
-
-    def get_size(self) -> int:
-        return self.size
-
-    def get_words(self) -> list[str]:
-        return self.words
+def response_filter(response: aiohttp.ClientResponse) -> bool:
+    if response.status == 404 or response.status == 500:
+        return False
+    return True
 
 
-def run(api: Api, wordlist_path: str, threads: int) -> None:
+async def method_sweep_endpoint(endpoint: Endpoint) -> None:
+    sweep_tasks = []
+    sweep_tasks.append(await endpoint.post())
+    sweep_tasks.append(await endpoint.put())
+    sweep_tasks.append(await endpoint.patch())
+    sweep_tasks.append(await endpoint.head())
+    sweep_tasks.append(await endpoint.delete())
+    for response in sweep_tasks:
+        await output_response(response)
+
+
+def index_mismatch(request_path: str, response_path: str) -> bool:
+    return request_path == response_path
+
+
+async def probe_endpoint(endpoint: Endpoint) -> None:
+    response = await endpoint.get()
+    if response.request_info.url.path != '/':
+        await output_response(response)
+        # if response_filter(response):
+        #     await method_sweep_endpoint(endpoint)
+
+
+async def output_response(response: aiohttp.ClientResponse) -> None:
+    row = [response.request_info.method, response.request_info.url.path, response.status, len(await response.text())]
+    if response_filter(response):
+        match str(response.status)[0]:
+            case "2":
+                console.output_row(row, color="light_green")
+            case "3":
+                console.output_row(row, color="light_blue")
+            case "4":
+                console.output_row(row, color="light_red")
+            case "5":
+                console.output_row(row, color="light_yellow")
+            case _:
+                console.output_row(row)
+    else:
+        console.output_row(row)
+        console.overwrite_last_line()
+
+
+async def enumerate(api: Api, wordlist_path: str, limit: int) -> None:
     wordlist = Wordlist(wordlist_path)
-    console.output(f"Fuzzing {wordlist.get_size()} endpoint(s)")
-    words = wordlist.get_words()
-    for word in words:
-        endpoint = Endpoint(api, word)
-        response = endpoint.probe()
-        output_columns = [endpoint.get_url(), response.status_code]
-        output_text = "".join(column.ljust(50) for column in map(str, output_columns))
-        if response.status_code == 404:
-            console.output_bad(output_text)
-            continue
-        console.output_good(output_text)
-    console.output("Fuzz complete")
+    wordlist.read()
+    connector = aiohttp.TCPConnector(force_close=True, limit=limit)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        console.output(f"Enumerating {wordlist.get_size()} endpoints...\n")
+        header = ["METHOD", "PATH", "STATUS", "SIZE"]
+        console.output_row(header)
+        probe_tasks = []
+        for word in wordlist.get_words():
+            endpoint = Endpoint(api, session, word)
+            task = asyncio.create_task(probe_endpoint(endpoint))
+            probe_tasks.append(task)
+        start_time = time.time()
+        await asyncio.gather(*probe_tasks)
+        elapsed_time = time.time() - start_time
+    console.output(
+        f"\nEnumerated {wordlist.get_size()} endpoint(s) in {elapsed_time:.2f} seconds"
+    )
+
+
+def run(api: Api, wordlist_path: str, limit: int) -> None:
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(enumerate(api, wordlist_path, limit))
